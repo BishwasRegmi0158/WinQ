@@ -66,6 +66,20 @@ def startup_event() -> None:
     _init_database()
 
 
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "Welcome to the Wine Quality API!",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "predict": "/predict",
+        "predictions": "/predictions",
+    }
+
+
 class WineData(BaseModel):
     fixed_acidity: float
     volatile_acidity: float
