@@ -1,13 +1,69 @@
-import pandas as pd
-import numpy as np
-from fastapi import FastAPI
-from pydantic import BaseModel
+import os
 import joblib
+import pandas as pd
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from connection import get_connection
 
-model = joblib.load("mero_model_pipeline.joblib")
+TABLE_NAME = "wine_table"
+MODEL_PATH = "mero_model_pipeline.joblib"
+DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
-app = FastAPI()
+model = joblib.load(MODEL_PATH)
+
+app = FastAPI(title="Wine Quality API")
+
+
+def _get_frontend_origins() -> list[str]:
+    raw_origins = os.getenv("FRONTEND_ORIGINS", DEFAULT_FRONTEND_ORIGINS)
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    if not origins:
+        return ["*"]
+    return origins
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_get_frontend_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _init_database() -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+            fixed_acidity REAL,
+            volatile_acidity REAL,
+            citric_acid REAL,
+            residual_sugar REAL,
+            chlorides REAL,
+            free_sulfur_dioxide REAL,
+            total_sulfur_dioxide REAL,
+            density REAL,
+            pH REAL,
+            sulphates REAL,
+            alcohol REAL,
+            Id INTEGER,
+            wine_quality INTEGER,
+            prediction_ID INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    _init_database()
 
 
 class WineData(BaseModel):
@@ -25,11 +81,16 @@ class WineData(BaseModel):
     Id: int
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
 @app.post("/predict")
 def predict_quality(data: WineData):
+    _init_database()
 
-    df = pd.DataFrame([data.dict()])
-
+    df = pd.DataFrame([data.model_dump()])
     df.columns = [
         "fixed acidity",
         "volatile acidity",
@@ -45,14 +106,14 @@ def predict_quality(data: WineData):
         "Id",
     ]
 
-    prediction = model.predict(df)
+    prediction = int(model.predict(df)[0])
 
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute(
-        """
-        INSERT INTO wineQ_table (
+        f"""
+        INSERT INTO {TABLE_NAME} (
             fixed_acidity,
             volatile_acidity,
             citric_acid,
@@ -66,7 +127,8 @@ def predict_quality(data: WineData):
             alcohol,
             Id,
             wine_quality
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
         (
             data.fixed_acidity,
             data.volatile_acidity,
@@ -80,22 +142,47 @@ def predict_quality(data: WineData):
             data.sulphates,
             data.alcohol,
             data.Id,
-            int(prediction[0]),
+            prediction,
         ),
     )
+
+    prediction_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    return {"predicted_quality": int(prediction[0])}
+    return {"predicted_quality": prediction, "prediction_id": prediction_id}
 
 
 @app.get("/predictions")
 def get_predictions():
+    _init_database()
+
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM wineQ_table")
+    cursor.execute(
+        f"""
+        SELECT
+            fixed_acidity,
+            volatile_acidity,
+            citric_acid,
+            residual_sugar,
+            chlorides,
+            free_sulfur_dioxide,
+            total_sulfur_dioxide,
+            density,
+            pH,
+            sulphates,
+            alcohol,
+            Id,
+            wine_quality,
+            prediction_ID
+        FROM {TABLE_NAME}
+        ORDER BY prediction_ID DESC
+        """
+    )
     rows = cursor.fetchall()
+    conn.close()
 
     return {
         "data": [
@@ -113,6 +200,11 @@ def get_predictions():
                 "alcohol": row[10],
                 "Id": row[11],
                 "wine_quality": row[12],
+                "prediction_id": row[13],
+
+
+
+
             }
             for row in rows
         ]
