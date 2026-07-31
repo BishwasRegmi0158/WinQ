@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 import joblib
 import pandas as pd
 from fastapi import FastAPI
@@ -88,7 +89,7 @@ class WineData(BaseModel):
     pH: float
     sulphates: float
     alcohol: float
-    Id: int
+    Id: Optional[int] = None
 
 
 @app.get("/health")
@@ -104,6 +105,7 @@ def predict_page_redirect():
 @app.post("/predict")
 def predict_quality(data: WineData):
     _init_database()
+    input_id = data.Id if data.Id is not None else 0
 
     df = pd.DataFrame([data.model_dump()])
     df.columns = [
@@ -120,6 +122,7 @@ def predict_quality(data: WineData):
         "alcohol",
         "Id",
     ]
+    df["Id"] = input_id
 
     prediction = int(model.predict(df)[0])
 
@@ -156,7 +159,7 @@ def predict_quality(data: WineData):
             data.pH,
             data.sulphates,
             data.alcohol,
-            data.Id,
+            input_id,
             prediction,
         ),
     )
@@ -226,22 +229,15 @@ def get_predictions():
     }
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def serve_frontend_root():
     frontend_index = FRONTEND_DIST_DIR / "index.html"
     if frontend_index.exists():
         return FileResponse(frontend_index)
-    return {
-        "message": "Frontend not built yet.",
-        "status": "running",
-        "docs": "/docs",
-        "health": "/health",
-        "predict": "/predict",
-        "predictions": "/predictions",
-    }
+    raise HTTPException(status_code=404, detail="Not found")
 
 
-@app.get("/{full_path:path}")
+@app.get("/{full_path:path}", include_in_schema=False)
 def serve_frontend_routes(full_path: str):
     if full_path.startswith(("docs", "openapi.json", "redoc", "predict", "predictions", "health")):
         raise HTTPException(status_code=404, detail="Not found")
