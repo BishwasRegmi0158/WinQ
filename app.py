@@ -5,6 +5,7 @@ import pandas as pd
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -93,6 +94,11 @@ class WineData(BaseModel):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/predict")
+def predict_page_redirect():
+    return RedirectResponse(url="/")
 
 
 @app.post("/predict")
