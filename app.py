@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 import joblib
 import pandas as pd
 from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from connection import get_connection
 
@@ -13,6 +17,7 @@ DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 model = joblib.load(MODEL_PATH)
 
 app = FastAPI(title="Wine Quality API")
+FRONTEND_DIST_DIR = Path("frontend") / "dist"
 
 
 def _get_frontend_origins() -> list[str]:
@@ -64,20 +69,10 @@ def _init_database() -> None:
 @app.on_event("startup")
 def startup_event() -> None:
     _init_database()
-
-
-
-
-@app.get("/")
-def root():
-    return {
-        "message": "Welcome to the Wine Quality API!",
-        "status": "running",
-        "docs": "/docs",
-        "health": "/health",
-        "predict": "/predict",
-        "predictions": "/predictions",
-    }
+    if FRONTEND_DIST_DIR.exists():
+        assets_dir = FRONTEND_DIST_DIR / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 
 class WineData(BaseModel):
@@ -223,3 +218,34 @@ def get_predictions():
             for row in rows
         ]
     }
+
+
+@app.get("/")
+def serve_frontend_root():
+    frontend_index = FRONTEND_DIST_DIR / "index.html"
+    if frontend_index.exists():
+        return FileResponse(frontend_index)
+    return {
+        "message": "Frontend not built yet.",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "predict": "/predict",
+        "predictions": "/predictions",
+    }
+
+
+@app.get("/{full_path:path}")
+def serve_frontend_routes(full_path: str):
+    if full_path.startswith(("docs", "openapi.json", "redoc", "predict", "predictions", "health")):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    candidate = FRONTEND_DIST_DIR / full_path
+    if candidate.exists() and candidate.is_file():
+        return FileResponse(candidate)
+
+    frontend_index = FRONTEND_DIST_DIR / "index.html"
+    if frontend_index.exists():
+        return FileResponse(frontend_index)
+
+    raise HTTPException(status_code=404, detail="Not found")
